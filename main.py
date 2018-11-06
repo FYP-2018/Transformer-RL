@@ -53,15 +53,15 @@ def train():
                     true_step = step + (epoch - 1) * train_g.num_batch
                     
                     if step % hp.train_record_steps == 0:
-                        s_loss, acc, _, summary = sess.run([train_g.loss, train_g.acc, train_g.train_op, train_g.merged])
-                        print("at step {}: loss = {}, rough-1 = {}".format(step, s_loss, acc))
+                        loss, acc, _, summary = sess.run([train_g.loss, train_g.acc, train_g.train_op, train_g.merged])
+                        print("at step {}: loss = {}, rough-1 = {}".format(step, loss, acc))
                         
                         # print("REWARD DIFF: ", rd.shape)
                         # print('ml loss: {}, rl loss: {}'.format(mlls, rlls)) # normal & nan
                         # print('reward_diff:', rd): TODO: sometimes zeros
                         # print('sample_preds: ', sl) # ok (reasonable outcome) & hv correct length (80 * 12)
                         # print('length of train_g.current_logtis_testing: ', len(train_g.current_logtis_testing))
-                        nsml.report(step=true_step, train_loss=float(s_loss), train_accuracy=float(acc))
+                        nsml.report(step=true_step, train_loss=float(loss), train_accuracy=float(acc))
                         
                         train_g.filewriter.add_summary(summary, true_step)
 

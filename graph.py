@@ -38,7 +38,7 @@ class Graph():
             self.ml_loss = self._add_ml_loss(is_training=is_training)
             self.rl_loss = self._add_rl_loss()
             
-            # self.rl_loss = tf.Print(input_=self.rl_loss, data=[self.rl_loss, self.ml_loss, self.sl, self.reward_diff], message='LS / ML / self.sl / reward_diff')
+            self.rl_loss = tf.Print(input_=self.rl_loss, data=[self.rl_loss, self.ml_loss, self.sl, self.reward_diff], message='LS / ML / self.sl / reward_diff')
             
             self.loss =  eta * self.rl_loss + (1 - eta) * self.ml_loss
 
@@ -250,7 +250,6 @@ class Graph():
                                    # shape: (batch_size, time_steps, num_hidden_units)
                                    
         with self.graph.as_default():
-            # cur_preds: an integer tensor
             '''
             # since "Using a `tf.Tensor` as a Python `bool` is not allowed"
             # -> switch to 'tf.cond'
@@ -259,18 +258,30 @@ class Graph():
             else:
                 cur_preds = tf.random_uniform(shape=(full_logits()[0], 1), minval=0, maxval=self.vocab_size, dtype=int32)
             '''
+            
             with tf.variable_scope(scope, reuse=reuse):
+                ### TODO: for each batch: if self.y[batch_i, current_timestep] == 0: the pred & logits of current step should be set to 0 (not consider)
+                cur_logit = tf.Print(input_=full_logits[:, cur_timestep, :], data=[full_logits[:, cur_timestep, :]], message='logits at timestep xx before softmax')
+                cur_logit = tf.nn.softmax(full_logits[:, cur_timestep, :], axis=-1) # shape: (num_batch, num_words) -- convert current output to prob
+                
+                '''
                 cur_preds = tf.cond(pred=greedy,
                                     true_fn=lambda: tf.to_int32(tf.argmax(full_logits[:, cur_timestep, :], axis=-1)), # for current timestep: choose the words with largest prob
                                     false_fn=lambda: tf.random_uniform(shape=(tf.shape(full_logits)[0], ), minval=0, maxval=self.vocab_size, dtype=tf.int32)) # sample
-                                    # shape of cur_preds: (batch_size, ): one-dimensional array
+                                    # shape: (batch_size, ): one-dimensional array
+                '''
                 
-                # WRONG since we r not allowed to direclty slice with tensor: cur_logit = full_logits[:, cur_timestep, cur_preds]
-                cur_idx = tf.stack([tf.range(start=0, limit=tf.shape(full_logits)[0]), cur_preds], axis=-1)
-                cur_logit = tf.gather_nd(params=full_logits[:, cur_timestep, :], indices=cur_idx) # select the wanted probabilities with current index from full_logits
+                cur_preds = tf.cond(pred=greedy,
+                                    true_fn=lambda: tf.argmax(cur_logit, axis=-1), # for current timestep: choose the words with largest prob, return: (batch_size, )
+                                    false_fn=lambda: tf.multinomial(logits=tf.log(cur_logit), num_samples=1)) # sample, with 'logits' to be log-pribability, return: (batch_size, 1)
+                                    
+                cur_preds = tf.to_int32(tf.reshape(cur_preds, shape=(hp.batch_size, )))  # convert (batch_size, 1) to (batch_size, ) # convert to int32 to match next step
                 
-                cur_logit = tf.nn.softmax(cur_logit, axis=-1) # get (batch_size, vocab_size), with each (, vocab_size) been softmax-ed
-                # cur_logit = tf.Print(input_=cur_logit_real, data=[cur_timestep, cur_logit_real], message='current logits at timestep xx ')
+                cur_idx = tf.stack([tf.range(start=0, limit=tf.shape(full_logits)[0]), cur_preds], axis=-1) # shape: (num_batch, 2) -- (under current timestep) select one word for each batch
+                cur_logit = tf.gather_nd(params=cur_logit, indices=cur_idx) # shape: (num_batch, ) -- select the wanted probabilities with current index from full_logits
+                
+                # cur_logit = tf.nn.softmax(cur_logit, axis=-1) # get (batch_size, vocab_size), with each (, vocab_size) been softmax-ed
+                # cur_logit = tf.Print(input_=cur_logit, data=[cur_timestep, cur_logit], message='current logits at timestep xx ')
                 
                 last_logits += tf.log(cur_logit) # shape: (num_batch, ) -- we only need the sum of log over each timestep
                 last_preds = tf.concat(values=[last_preds, tf.reshape(cur_preds, shape=(hp.batch_size, 1))],
@@ -320,18 +331,22 @@ class Graph():
         # print("========= reward_diff ", rouge_l_fscore(sample_preds, self.y).get_shape()) # unknown
         self.sl = sample_logits
         
-        self.reward_diff = tf.Print(input_=self.reward_diff, data=[tf.shape(self.reward_diff), self.reward_diff], message='shape of reward_diff')
+        self.reward_diff = tf.Print(input_=self.reward_diff, data=[tf.shape(self.reward_diff), tf.reduce_sum(self.reward_diff)], message='shape of reward_diff')
         sample_logits = tf.Print(input_=sample_logits, data=[tf.shape(sample_logits), sample_logits], message='shape of sample_logits')
         
         self.istarget = tf.to_float(tf.not_equal(self.y, 0)) # only consider the target positions & average the loss
-        rl_loss = tf.reduce_sum(tf.multiply(self.reward_diff, sample_logits), name='rl_loss') / (tf.reduce_sum(self.istarget))
-
+        # ml_loss = tf.reduce_sum(loss * self.istarget, name='fake_ml_loss') / (tf.reduce_sum(self.istarget))
+        # rl_loss = tf.reduce_sum(tf.multiply(self.reward_diff, sample_logits), name='rl_loss') / (tf.reduce_sum(self.istarget))
+        # rl_loss = tf.reduce_sum(self.reward_diff * sample_logits * self.istarget)/ (tf.reduce_sum(self.istarget))
+        # rl_loss = tf.reduce_sum(self.reward_diff * sample_logits)/ (tf.reduce_sum(self.istarget))   # not good!! filter out the PAD position in sample_logits
+        rl_loss = tf.reduce_sum(self.reward_diff * sample_logits) / (hp.batch_size * hp.summary_maxlen)
+        
         return rl_loss
-    
+        
     
     def get_filewriter(self):
         return self.filewriter
-
+    
     def get_input_output(self, is_training=False):
         if is_training:
             return io_pairs(input=[self.x, self.y], output=[self.logits, self.loss])
@@ -346,7 +361,7 @@ class Graph():
             lookup_table = self.graph.get_tensor_by_name("concated_lookup_table:0")
         
         return lookup_table
-
+    
     def get_batch_embedding(self):
         """ only return the embedding of current batch"""
         return [self.batch_inp_emb, self.batch_outp_emb]
