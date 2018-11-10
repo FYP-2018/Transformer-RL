@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 #/usr/bin/python3
+# TRANSFORMER + RL
 
 from __future__ import print_function
 import os, codecs
@@ -15,6 +16,7 @@ from modules import *
 from graph import Graph
 from hyperparams import Hyperparams as hp
 from data_load import load_doc_vocab, load_sum_vocab, load_data
+
 
 def train():
     try:
@@ -36,7 +38,11 @@ def train():
     with train_g.graph.as_default():
         sv = tf.train.Supervisor(logdir=hp.logdir)
         # with sv.managed_session(config=tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)) as sess:
-        with sv.managed_session(config=tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)) as sess:
+        config = tf.ConfigProto(allow_soft_placement=True,
+                                log_device_placement=False)
+        config.gpu_options.allow_growth = True
+
+        with sv.managed_session(config=config) as sess:
             coord = tf.train.Coordinator()
             threads = tf.train.start_queue_runners(sess=sess, coord=coord)
             
@@ -44,44 +50,53 @@ def train():
             for epoch in range(1, hp.num_epochs+1):
                 print("Starting {}-th epoch".format(epoch))
                 
+                # not train rl part in frist few session, for better efficiency
+                if epoch <= hp.eta_thredshold:
+                    train_op = train_g.train_op_ml
+                else:
+                    train_op = train_g.train_op_mix
+                    if train_g.eta <= 0.9:
+                        train_g.eta += 0.1 # each time increase the weight of reinforcement learning loss
+                        print("increasing eta")
+                            
                 if sv.should_stop():
                     break
                     
                 # for step in tqdm(range(train_g.num_batch), total=train_g.num_batch, ncols=70, leave=False, unit='b'):
                 for step in range(train_g.num_batch):
-                    # sess.run(train_g.train_op)
                     true_step = step + (epoch - 1) * train_g.num_batch
                     
                     if step % hp.train_record_steps == 0:
-                        loss, acc, _, summary = sess.run([train_g.loss, train_g.acc, train_g.train_op, train_g.merged])
-                        print("at step {}: loss = {}, rough-1 = {}".format(step, loss, acc))
+                        batch_rouge, loss, acc, _, summary = sess.run([train_g.batch_rouge, train_g.loss, train_g.acc, train_op, train_g.merged])
+                        rouge = float(batch_rouge) / hp.batch_size
+                        print("at step {}: loss = {}, acc={}, batch_rouge = {}, rouge = {}".format(step, loss, acc, batch_rouge, rouge))
                         
                         # print("REWARD DIFF: ", rd.shape)
                         # print('ml loss: {}, rl loss: {}'.format(mlls, rlls)) # normal & nan
                         # print('reward_diff:', rd): TODO: sometimes zeros
                         # print('sample_preds: ', sl) # ok (reasonable outcome) & hv correct length (80 * 12)
                         # print('length of train_g.current_logtis_testing: ', len(train_g.current_logtis_testing))
-                        nsml.report(step=true_step, train_loss=float(loss), train_accuracy=float(acc))
-                        
+                        nsml.report(step=true_step, train_loss=float(loss), train_accuracy=float(acc), batch_rouge=float(batch_rouge), rouge=float(rouge))
                         train_g.filewriter.add_summary(summary, true_step)
-
+                    
                     else:
-                        sess.run(train_g.train_op)
+                        sess.run(train_op)
                     
                     if true_step % hp.checkpoint_steps == 0:
                         # gs = sess.run(train_g.global_step)
                         # true_step = step + epoch * train_g.num_batch
                         sv.saver.save(sess, hp.logdir + '/model_epoch_%02d_step_%d' % (epoch, true_step))
-
+                    
                     if true_step > hp.eval_record_threshold and step % hp.eval_record_steps == 0:
-                        blue_score = eval()
+                        pass
+                        # blue_score = eval()
                         # eval(type='eval_tmp') # record result on training set
                         # true_step = step + epoch * train_g.num_batch
                         # nsml.report(step=true_step, blue_score=float(blue_score))
 
                 gs = sess.run(train_g.global_step)
                 sv.saver.save(sess, hp.logdir + '/model_epoch_%02d_gs_%d' % (epoch, gs))
-                
+                eval()
                 # test(num_epoch=epoch)  # test once per epoch
                 
     print("Done")
@@ -181,7 +196,7 @@ def eval(type='eval'):
                     sources = Sources[i*hp.batch_size: (i+1)*hp.batch_size]
                     targets = Targets[i*hp.batch_size: (i+1)*hp.batch_size]
                     print('prepared input data')
-
+                    
                     ### Autoregressive inference
                     preds = np.zeros((hp.batch_size, hp.summary_maxlen), np.int32)
                     for j in range(hp.summary_maxlen):

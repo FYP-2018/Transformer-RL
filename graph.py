@@ -29,43 +29,46 @@ class Graph():
 
             self.decoder_inputs = tf.concat((tf.ones_like(self.y[:, :1]) * 2, self.y[:, :-1]), -1)  # 2:<S>
             
-
             self._add_encoder(is_training=is_training)
             # add decoder
-
-            # eta = tf.get_variable(tf.zeros(shape=(1)))
-            eta = tf.convert_to_tensor(0.4)
             self.ml_loss = self._add_ml_loss(is_training=is_training)
-            self.rl_loss = self._add_rl_loss()
             
-            self.rl_loss = tf.Print(input_=self.rl_loss, data=[self.rl_loss, self.ml_loss, self.sl, self.reward_diff], message='LS / ML / self.sl / reward_diff')
-            
-            self.loss =  eta * self.rl_loss + (1 - eta) * self.ml_loss
+            if is_training:
+                # self.eta = tf.get_variable(initializer=0.4, name='eta')
+                
+                self.eta = 0
+                self.rl_loss = self._add_rl_loss()
+                self.rl_loss = tf.Print(input_=self.rl_loss, data=[self.rl_loss, self.ml_loss, self.sl, self.reward_diff], message='LS / ML / self.sl / reward_diff')
+                
+                self.loss =  self.eta  * self.rl_loss + (1 - self.eta ) * self.ml_loss
 
-            # Training Scheme
-            self.global_step = tf.Variable(0, name='global_step', trainable=False)
-            self.optimizer = tf.train.AdamOptimizer(learning_rate=hp.lr, beta1=0.9, beta2=0.98, epsilon=1e-8)
-            # self.train_op = self.optimizer.minimize(self.mean_loss, global_step=self.global_step)
-            
-            self.grads_and_vars = self.optimizer.compute_gradients(loss=self.loss) # TODO: change mean_loss to mix_loss
-            self.train_op = self.optimizer.apply_gradients(grads_and_vars=self.grads_and_vars, global_step=self.global_step)
-            
-            # record gradient
-            '''
-            for index, grad in enumerate(self.grads_and_vars):
-                if index % 15 != 0:
-                    continue
-                if isinstance(grad[0], tf.IndexedSlices):
-                    tf.summary.histogram(name="{}-grad".format(grad[1].name), values=grad[0].values)
-                else:
-                    tf.summary.histogram(name="{}-grad".format(grad[1].name), values=grad[0])
-            '''
-            # Summary
-            tf.summary.histogram(name="embedding", values=self.get_embedding_table())
-            tf.contrib.summary.scalar('rl_loss', self.rl_loss)
-            tf.contrib.summary.scalar('ml_loss', self.ml_loss)
-            tf.contrib.summary.scalar('loss', self.loss)
-            self.merged = tf.summary.merge_all()
+                # Training Scheme
+                self.global_step = tf.Variable(0, name='global_step', trainable=False)
+                self.optimizer = tf.train.AdamOptimizer(learning_rate=hp.lr, beta1=0.9, beta2=0.98, epsilon=1e-8)
+                
+                self.grads_and_vars_mix = self.optimizer.compute_gradients(loss=self.loss) # TODO: change mean_loss to mix_loss
+                self.train_op_mix = self.optimizer.apply_gradients(grads_and_vars=self.grads_and_vars_mix, global_step=self.global_step)
+                
+                self.grads_and_vars_ml = self.optimizer.compute_gradients(loss=self.ml_loss) # TODO: change mean_loss to mix_loss
+                self.train_op_ml = self.optimizer.apply_gradients(grads_and_vars=self.grads_and_vars_ml, global_step=self.global_step)
+
+
+                # record gradient
+                '''
+                for index, grad in enumerate(self.grads_and_vars):
+                    if index % 15 != 0:
+                        continue
+                    if isinstance(grad[0], tf.IndexedSlices):
+                        tf.summary.histogram(name="{}-grad".format(grad[1].name), values=grad[0].values)
+                    else:
+                        tf.summary.histogram(name="{}-grad".format(grad[1].name), values=grad[0])
+                '''
+                # Summary
+                tf.summary.histogram(name="embedding", values=self.get_embedding_table())
+                tf.contrib.summary.scalar('rl_loss', self.rl_loss)
+                tf.contrib.summary.scalar('ml_loss', self.ml_loss)
+                tf.contrib.summary.scalar('loss', self.loss)
+                self.merged = tf.summary.merge_all()
             
         self.filewriter = tf.summary.FileWriter(hp.tb_dir + '/train', self.graph)
 
@@ -199,20 +202,20 @@ class Graph():
     
     def _add_ml_loss(self, is_training):
         logits = self._add_decoder(is_training=is_training, decoder_inputs=self.decoder_inputs)
-
+        
         with self.graph.as_default():
-            self.preds = tf.to_int32(tf.argmax(logits, axis=-1))
-            # IMPORTANT: here we havent pass the logits through softmax!! (yet since the index
-            # of max-value is same so gonna be fine if we just want to use to predict
-            # but for the rl part, or if u want to do beam-search, need to pass it to softmax
-            # to obtain the probability
-            self.istarget = tf.to_float(tf.not_equal(self.y, 0))
+            self.preds = tf.to_int32(tf.argmax(logits, axis=-1)) # shape: (batch_size, max_timestep)
+            self.istarget = tf.to_float(tf.not_equal(self.y, 0)) # shape: (batch_size, max_timestep)
             self.acc = tf.reduce_sum(tf.to_float(tf.equal(self.preds, self.y)) * self.istarget) / (
                 tf.reduce_sum(self.istarget))
+            
+            self.batch_rouge = tf.reduce_sum(rouge_l_fscore(self.preds, self.y))
+            
             '''
             tf.summary.histogram(name="logits", values=self.logits)
             tf.summary.scalar('acc', self.acc)
             '''
+            ml_loss = None
             if is_training:
                 # Loss
                 # self.y_smoothed = label_smoothing(tf.one_hot(self.y, depth=len(en2idx)))
@@ -325,20 +328,19 @@ class Graph():
     def _add_rl_loss(self):
         sample_logits, sample_preds = self._rl_autoinfer(greedy=tf.constant(value=False, dtype=tf.bool), name='sample_loop')
         greedy_logits, greedy_preds = self._rl_autoinfer(greedy=tf.constant(value=True, dtype=tf.bool), name='greedy_loop')
-        
-        # print("========= TYPE OF RETURNED SCORE: ", type(rouge_l_fscore(sample_preds, self.y)))
-        self.reward_diff = rouge_l_fscore(greedy_preds, self.y) - rouge_l_fscore(sample_preds, self.y)
-        # print("========= reward_diff ", rouge_l_fscore(sample_preds, self.y).get_shape()) # unknown
         self.sl = sample_logits
+        
+        # self.reward_diff = rouge_l_fscore(greedy_preds, self.y) - rouge_l_fscore(sample_preds, self.y)
+        # add mask to rl_loss
+        self.reward_diff = tf.zeros(shape=())
+        # self.istarget = tf.to_float(tf.not_equal(self.y, 0)) # only consider the target positions & average the loss
+        for sent_i, ref in enumerate(tf.unstack(self.y)):
+            real_y = ref[:tf.reduce_sum(tf.to_int32(tf.not_equal(self.y, 0)))] # remove the <PAD> in the end
+            self.reward_diff += rouge_l_fscore([greedy_preds[sent_i]], [real_y]) - rouge_l_fscore([sample_preds[sent_i]], [real_y])
         
         self.reward_diff = tf.Print(input_=self.reward_diff, data=[tf.shape(self.reward_diff), tf.reduce_sum(self.reward_diff)], message='shape of reward_diff')
         sample_logits = tf.Print(input_=sample_logits, data=[tf.shape(sample_logits), sample_logits], message='shape of sample_logits')
         
-        self.istarget = tf.to_float(tf.not_equal(self.y, 0)) # only consider the target positions & average the loss
-        # ml_loss = tf.reduce_sum(loss * self.istarget, name='fake_ml_loss') / (tf.reduce_sum(self.istarget))
-        # rl_loss = tf.reduce_sum(tf.multiply(self.reward_diff, sample_logits), name='rl_loss') / (tf.reduce_sum(self.istarget))
-        # rl_loss = tf.reduce_sum(self.reward_diff * sample_logits * self.istarget)/ (tf.reduce_sum(self.istarget))
-        # rl_loss = tf.reduce_sum(self.reward_diff * sample_logits)/ (tf.reduce_sum(self.istarget))   # not good!! filter out the PAD position in sample_logits
         rl_loss = tf.reduce_sum(self.reward_diff * sample_logits) / (hp.batch_size * hp.summary_maxlen)
         
         return rl_loss
