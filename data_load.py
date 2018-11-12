@@ -54,8 +54,8 @@ def create_data(source_sents, target_sents):
         if cur_ariticle_idx % 1000000 == 0:
             print("\tPreparing {}-th article matrix".format(cur_ariticle_idx))
         
-        # if cur_ariticle_idx == 200:
-        #     break  # TEMP
+        if cur_ariticle_idx == 1000:
+            break  # TEMP
 
         # remove short sentences & chop long sentences
         if len(source_sent) < hp.article_minlen or len(target_sent) < hp.summary_minlen:

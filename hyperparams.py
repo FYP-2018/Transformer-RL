@@ -60,10 +60,10 @@ class Hyperparams: # for CNNDM data
     eval_record_threshold = 1000
     eval_record_steps = 1000  # should be larger than checkpoint_steps? otherwise would duplicate
     train_record_steps = 50
-    eta_thredshold = 30
+    eta_thredshold = 60
 
-    batch_size = 6  # orig：32
-    num_epochs = 30
+    batch_size = 50  # orig：32
+    num_epochs = 60
     
     ## data source
     source_train = os.path.join(DATASET_PATH, 'train', 'train_content.txt')
@@ -80,10 +80,11 @@ class Hyperparams: # for CNNDM data
     
     ## data parameter
     min_cnt = 20  # words whose occurred less than min_cnt are encoded as <UNK>.
-    article_minlen = 400
-    article_maxlen = 500  # Maximum number of words in a sentence. alias = T.
+    article_minlen = 300
+    article_maxlen = 400  # Maximum number of words in a sentence. alias = T.
     summary_minlen = 40
     summary_maxlen = 60  # Maximum number of words in a sentence. alias = T.
+    
     
     ## training parameter
     sinusoid = False # If True, use sinusoid. If false, positional embedding.
@@ -92,10 +93,9 @@ class Hyperparams: # for CNNDM data
     num_blocks = 3
     num_heads = 8
     
-
-    
     lr = 0.0001
     dropout_rate = 0.1
+
 
 class LCSTS_Hyperparams: # for LCSTS data
     ## log path; frequency
@@ -133,7 +133,7 @@ class LCSTS_Hyperparams: # for LCSTS data
     sinusoid = False # If True, use sinusoid. If false, positional embedding.
     
     hidden_units = 512  # alias = C # orig: 512
-    num_blocks = 3  # number of encoder/decoder blocks
+    num_blocks = 6  # number of encoder/decoder blocks
     num_heads = 8
     
     

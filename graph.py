@@ -38,7 +38,7 @@ class Graph():
                 
                 self.eta = 0
                 self.rl_loss = self._add_rl_loss()
-                self.rl_loss = tf.Print(input_=self.rl_loss, data=[self.rl_loss, self.ml_loss, self.sl, self.reward_diff], message='LS / ML / self.sl / reward_diff')
+                # self.rl_loss = tf.Print(input_=self.rl_loss, data=[self.rl_loss, self.ml_loss, self.sl, self.reward_diff], message='LS / ML / self.sl / reward_diff')
                 
                 self.loss =  self.eta  * self.rl_loss + (1 - self.eta ) * self.ml_loss
 
@@ -264,7 +264,7 @@ class Graph():
             
             with tf.variable_scope(scope, reuse=reuse):
                 ### TODO: for each batch: if self.y[batch_i, current_timestep] == 0: the pred & logits of current step should be set to 0 (not consider)
-                cur_logit = tf.Print(input_=full_logits[:, cur_timestep, :], data=[full_logits[:, cur_timestep, :]], message='logits at timestep xx before softmax')
+                # cur_logit = tf.Print(input_= full_logits[:, cur_timestep, :], data=[full_logits[:, cur_timestep, :]], message='logits at timestep xx before softmax')
                 cur_logit = tf.nn.softmax(full_logits[:, cur_timestep, :], axis=-1) # shape: (num_batch, num_words) -- convert current output to prob
                 
                 '''
@@ -282,9 +282,6 @@ class Graph():
                 
                 cur_idx = tf.stack([tf.range(start=0, limit=tf.shape(full_logits)[0]), cur_preds], axis=-1) # shape: (num_batch, 2) -- (under current timestep) select one word for each batch
                 cur_logit = tf.gather_nd(params=cur_logit, indices=cur_idx) # shape: (num_batch, ) -- select the wanted probabilities with current index from full_logits
-                
-                # cur_logit = tf.nn.softmax(cur_logit, axis=-1) # get (batch_size, vocab_size), with each (, vocab_size) been softmax-ed
-                # cur_logit = tf.Print(input_=cur_logit, data=[cur_timestep, cur_logit], message='current logits at timestep xx ')
                 
                 last_logits += tf.log(cur_logit) # shape: (num_batch, ) -- we only need the sum of log over each timestep
                 last_preds = tf.concat(values=[last_preds, tf.reshape(cur_preds, shape=(hp.batch_size, 1))],
@@ -338,8 +335,8 @@ class Graph():
             real_y = ref[:tf.reduce_sum(tf.to_int32(tf.not_equal(self.y, 0)))] # remove the <PAD> in the end
             self.reward_diff += rouge_l_fscore([greedy_preds[sent_i]], [real_y]) - rouge_l_fscore([sample_preds[sent_i]], [real_y])
         
-        self.reward_diff = tf.Print(input_=self.reward_diff, data=[tf.shape(self.reward_diff), tf.reduce_sum(self.reward_diff)], message='shape of reward_diff')
-        sample_logits = tf.Print(input_=sample_logits, data=[tf.shape(sample_logits), sample_logits], message='shape of sample_logits')
+        # self.reward_diff = tf.Print(input_=self.reward_diff, data=[tf.shape(self.reward_diff), tf.reduce_sum(self.reward_diff)], message='shape of reward_diff')
+        # sample_logits = tf.Print(input_=sample_logits, data=[tf.shape(sample_logits), sample_logits], message='shape of sample_logits')
         
         rl_loss = tf.reduce_sum(self.reward_diff * sample_logits) / (hp.batch_size * hp.summary_maxlen)
         

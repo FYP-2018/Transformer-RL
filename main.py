@@ -61,7 +61,8 @@ def train():
                             
                 if sv.should_stop():
                     break
-                    
+            
+                print("num_batch: ", train_g.num_batch)
                 # for step in tqdm(range(train_g.num_batch), total=train_g.num_batch, ncols=70, leave=False, unit='b'):
                 for step in range(train_g.num_batch):
                     true_step = step + (epoch - 1) * train_g.num_batch
@@ -87,19 +88,25 @@ def train():
                         # true_step = step + epoch * train_g.num_batch
                         sv.saver.save(sess, hp.logdir + '/model_epoch_%02d_step_%d' % (epoch, true_step))
                     
-                    if true_step > hp.eval_record_threshold and step % hp.eval_record_steps == 0:
+                    # if true_step > hp.eval_record_threshold and step % hp.eval_record_steps == 0:
+                    if true_step % 10 == 0:
+
+                        eval(cur_step=true_step, write_file=False)
                         pass
                         # blue_score = eval()
                         # eval(type='eval_tmp') # record result on training set
                         # true_step = step + epoch * train_g.num_batch
                         # nsml.report(step=true_step, blue_score=float(blue_score))
+                        
+                # iteration indent
+            # epoch indent
+            gs = sess.run(train_g.global_step)
+            sv.saver.save(sess, hp.logdir + '/model_epoch_%02d_gs_%d' % (epoch, gs))
+            eval(cur_step=true_step, write_file=True)
+            # test(num_epoch=epoch)  # test once per epoch
 
-                gs = sess.run(train_g.global_step)
-                sv.saver.save(sess, hp.logdir + '/model_epoch_%02d_gs_%d' % (epoch, gs))
-                eval()
-                # test(num_epoch=epoch)  # test once per epoch
-                
     print("Done")
+
 
 def test(num_epoch=10):
     # Load graph
@@ -110,7 +117,7 @@ def test(num_epoch=10):
     X, Sources = load_data(type='test')
     word2idx, idx2word = load_sum_vocab()
     
-    # Start session         
+    # Start session
     with g.graph.as_default():
         sv = tf.train.Supervisor(logdir=hp.logdir)
         # with sv.managed_session(config=tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)) as sess:
@@ -157,7 +164,7 @@ def test(num_epoch=10):
                         fout.flush()
 
 
-def eval(type='eval'):
+def eval(type='eval', cur_step=0, write_file=True):
     # Load graph
     g = Graph(is_training=False)
     print("Eval Graph loaded")
@@ -183,14 +190,13 @@ def eval(type='eval'):
             ## Inference
             if not os.path.exists('results'): os.mkdir('results')
             
-            # for these 2 file, one version gonna be enough 
-            fout2 = codecs.open("results/eval-pred", "w", "utf-8")
-            fout3 = codecs.open("results/eval-title", "w", "utf-8")
-            with codecs.open("results/eval-" + type + "_" + mname, "w", "utf-8") as fout:
-                list_of_refs, hypotheses = [], []
-                for i in range(len(X) // hp.batch_size):
+            if not write_file:
+                total_acc = 0.0
+                total_rouge = 0.0
+                num_batch = len(X) // hp.batch_size
+                for i in range(num_batch):
                     print('The {}-th batch'.format(i))
-
+                    
                     ### Get mini-batches
                     x = X[i*hp.batch_size: (i+1)*hp.batch_size]
                     sources = Sources[i*hp.batch_size: (i+1)*hp.batch_size]
@@ -200,36 +206,79 @@ def eval(type='eval'):
                     ### Autoregressive inference
                     preds = np.zeros((hp.batch_size, hp.summary_maxlen), np.int32)
                     for j in range(hp.summary_maxlen):
-                        _preds = sess.run(g.preds, {g.x: x, g.y: preds})
-                        preds[:, j] = _preds[:, j]
+                        if j == hp.summary_maxlen - 1:
+                            _batch_rouge, _acc, _preds = sess.run([g.batch_rouge, g.acc, g.preds], {g.x: x, g.y: preds})
+                        else:
+                            _preds = sess.run(g.preds, {g.x: x, g.y: preds})
+                            preds[:, j] = _preds[:, j]
+                    total_acc += _acc
+                    total_rouge += (float(_batch_rouge) / hp.batch_size)
                     
-                    ### Write to file
-                    for source, target, pred in zip(sources, targets, preds): # sentence-wise
-                        got = " ".join(idx2word[idx] for idx in pred).split("</S>")[0].strip()
-                        sentence_to_write = "-source: {}\n-expected: {}\n-got: {}\n\n".format(source, target, got)
+                total_acc = float(total_acc) / num_batch
+                total_rouge = float(total_rouge) / num_batch
+                print("cur_step: {}, total_acc: {}, total_rouge: {}".format(cur_step, total_acc, total_rouge))
+                nsml.report(step=cur_step, test_accuracy=float(total_acc), test_rouge=float(total_rouge))
+
+            else:
+                fout2 = codecs.open("results/eval-pred", "w", "utf-8")
+                fout3 = codecs.open("results/eval-title", "w", "utf-8")
+                with codecs.open("results/eval-" + type + "_" + mname, "w", "utf-8") as fout:
+                    list_of_refs, hypotheses = [], []
+                    total_acc = 0.0
+                    total_rouge = 0.0
+                    num_batch = len(X) // hp.batch_size
+                    for i in range(num_batch):
+                        print('The {}-th batch'.format(i))
+
+                        ### Get mini-batches
+                        x = X[i*hp.batch_size: (i+1)*hp.batch_size]
+                        sources = Sources[i*hp.batch_size: (i+1)*hp.batch_size]
+                        targets = Targets[i*hp.batch_size: (i+1)*hp.batch_size]
+                        print('prepared input data')
+                        
+                        ### Autoregressive inference
+                        preds = np.zeros((hp.batch_size, hp.summary_maxlen), np.int32)
+                        for j in range(hp.summary_maxlen):
+                            if j == hp.summary_maxlen - 1:
+                                _batch_rouge, _acc, _preds = sess.run([g.batch_rouge, g.acc, g.preds], {g.x: x, g.y: preds})
+                            else:
+                                _preds = sess.run(g.preds, {g.x: x, g.y: preds})
+                                preds[:, j] = _preds[:, j]
+                        '''
+                        total_acc += _acc
+                        total_rouge += (float(_batch_rouge) / hp.batch_size)
+                        '''
+                        ### Write to file
+                        for source, target, pred in zip(sources, targets, preds): # sentence-wise
+                            got = " ".join(idx2word[idx] for idx in pred).split("</S>")[0].strip()
+                            sentence_to_write = "-source: {}\n-expected: {}\n-got: {}\n\n".format(source, target, got)
                             
-                        print(sentence_to_write)
-                        fout.write(sentence_to_write)
-                        fout2.write(got.strip() + '\n')
-                        fout3.write(target.strip() + '\n')
+                            print(sentence_to_write)
+                            fout.write(sentence_to_write)
+                            fout2.write(got.strip() + '\n')
+                            fout3.write(target.strip() + '\n')
 
-                        fout.flush()
-                        fout2.flush()
-                        fout3.flush()
+                            fout.flush()
+                            fout2.flush()
+                            fout3.flush()
 
-                        # bleu score
-                        ref = target.split()
-                        hypothesis = got.split()
-                        if len(ref) > 3 and len(hypothesis) > 3:
-                            list_of_refs.append([ref])
-                            hypotheses.append(hypothesis)
-            
-                ## Calculate bleu score
-                score = corpus_bleu(list_of_refs, hypotheses)
-                print("Bleu Score = " + str(100*score))
-                fout.write("Bleu Score = " + str(100*score))
-    return score
+                            # bleu score
+                            ref = target.split()
+                            hypothesis = got.split()
+                            if len(ref) > 3 and len(hypothesis) > 3:
+                                list_of_refs.append([ref])
+                                hypotheses.append(hypothesis)
+                                
+                    total_acc = float(total_acc) / num_batch
+                    total_rouge = float(total_rouge) / num_batch
+                    nsml.report(step=cur_step, test_accuracy=float(total_acc), test_rouge=float(total_rouge))
 
+                    ## Calculate bleu score
+                    score = corpus_bleu(list_of_refs, hypotheses)
+                    print("Bleu Score = " + str(100*score))
+                    fout.write("Bleu Score = " + str(100*score))
+    # return score
+    return None
 
 if __name__ == '__main__':
     logging.info("START")
