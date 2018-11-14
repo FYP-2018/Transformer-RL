@@ -16,7 +16,7 @@ from modules import *
 from graph import Graph
 from hyperparams import Hyperparams as hp
 from data_load import load_doc_vocab, load_sum_vocab, load_data
-
+from rouge_tensor import rouge_l_sentence_level
 
 def train():
     try:
@@ -41,7 +41,7 @@ def train():
         config = tf.ConfigProto(allow_soft_placement=True,
                                 log_device_placement=False)
         config.gpu_options.allow_growth = True
-
+        
         with sv.managed_session(config=config) as sess:
             coord = tf.train.Coordinator()
             threads = tf.train.start_queue_runners(sess=sess, coord=coord)
@@ -63,21 +63,15 @@ def train():
                     break
             
                 print("num_batch: ", train_g.num_batch)
-                # for step in tqdm(range(train_g.num_batch), total=train_g.num_batch, ncols=70, leave=False, unit='b'):
                 for step in range(train_g.num_batch):
                     true_step = step + (epoch - 1) * train_g.num_batch
                     
                     if step % hp.train_record_steps == 0:
-                        batch_rouge, loss, acc, _, summary = sess.run([train_g.batch_rouge, train_g.loss, train_g.acc, train_op, train_g.merged])
+                        batch_rouge, loss, acc, _, summary, norm_ml = sess.run([train_g.batch_rouge, train_g.loss, train_g.acc, train_op, train_g.merged, train_g.globle_norm_ml])
                         rouge = float(batch_rouge) / hp.batch_size
                         print("at step {}: loss = {}, acc={}, batch_rouge = {}, rouge = {}".format(step, loss, acc, batch_rouge, rouge))
                         
-                        # print("REWARD DIFF: ", rd.shape)
-                        # print('ml loss: {}, rl loss: {}'.format(mlls, rlls)) # normal & nan
-                        # print('reward_diff:', rd): TODO: sometimes zeros
-                        # print('sample_preds: ', sl) # ok (reasonable outcome) & hv correct length (80 * 12)
-                        # print('length of train_g.current_logtis_testing: ', len(train_g.current_logtis_testing))
-                        nsml.report(step=true_step, train_loss=float(loss), train_accuracy=float(acc), batch_rouge=float(batch_rouge), rouge=float(rouge))
+                        nsml.report(step=true_step, train_loss=float(loss), train_accuracy=float(acc), batch_rouge=float(batch_rouge), rouge=float(rouge), norm_ml=float(norm_ml))
                         train_g.filewriter.add_summary(summary, true_step)
                     
                     else:
@@ -89,8 +83,8 @@ def train():
                         sv.saver.save(sess, hp.logdir + '/model_epoch_%02d_step_%d' % (epoch, true_step))
                     
                     # if true_step > hp.eval_record_threshold and step % hp.eval_record_steps == 0:
-                    if true_step % 10 == 0:
-
+                    if true_step > 0 and true_step % hp.eval_record_steps == 0:
+                        # if true_step % 10 == 0:
                         eval(cur_step=true_step, write_file=False)
                         pass
                         # blue_score = eval()
@@ -176,7 +170,6 @@ def eval(type='eval', cur_step=0, write_file=True):
     de2idx, idx2de = load_doc_vocab()
     word2idx, idx2word = load_sum_vocab()
     
-    # X, Sources, Targets = X[:65], Sources[:65], Targets[:65]
     
     # Start session
     with g.graph.as_default():
@@ -190,94 +183,59 @@ def eval(type='eval', cur_step=0, write_file=True):
             ## Inference
             if not os.path.exists('results'): os.mkdir('results')
             
-            if not write_file:
-                total_acc = 0.0
-                total_rouge = 0.0
-                num_batch = len(X) // hp.batch_size
-                for i in range(num_batch):
-                    print('The {}-th batch'.format(i))
-                    
-                    ### Get mini-batches
-                    x = X[i*hp.batch_size: (i+1)*hp.batch_size]
-                    sources = Sources[i*hp.batch_size: (i+1)*hp.batch_size]
-                    targets = Targets[i*hp.batch_size: (i+1)*hp.batch_size]
-                    print('prepared input data')
-                    
-                    ### Autoregressive inference
-                    preds = np.zeros((hp.batch_size, hp.summary_maxlen), np.int32)
-                    for j in range(hp.summary_maxlen):
-                        if j == hp.summary_maxlen - 1:
-                            _batch_rouge, _acc, _preds = sess.run([g.batch_rouge, g.acc, g.preds], {g.x: x, g.y: preds})
-                        else:
-                            _preds = sess.run(g.preds, {g.x: x, g.y: preds})
-                            preds[:, j] = _preds[:, j]
-                    total_acc += _acc
-                    total_rouge += (float(_batch_rouge) / hp.batch_size)
-                    
-                total_acc = float(total_acc) / num_batch
-                total_rouge = float(total_rouge) / num_batch
-                print("cur_step: {}, total_acc: {}, total_rouge: {}".format(cur_step, total_acc, total_rouge))
-                nsml.report(step=cur_step, test_accuracy=float(total_acc), test_rouge=float(total_rouge))
-
-            else:
+            if write_file:
+                ### Write to file
                 fout2 = codecs.open("results/eval-pred", "w", "utf-8")
                 fout3 = codecs.open("results/eval-title", "w", "utf-8")
-                with codecs.open("results/eval-" + type + "_" + mname, "w", "utf-8") as fout:
-                    list_of_refs, hypotheses = [], []
-                    total_acc = 0.0
-                    total_rouge = 0.0
-                    num_batch = len(X) // hp.batch_size
-                    for i in range(num_batch):
-                        print('The {}-th batch'.format(i))
+                fout =  codecs.open("results/eval-" + type + "_" + mname, "w", "utf-8")
+            
+            list_of_refs, hypotheses = [], []
+            num_batch = len(X) // hp.batch_size
+            print("num batch: ", num_batch, "len(X): ", len(X) )
+            for i in range(num_batch):
+                print('The {}-th batch'.format(i))
 
-                        ### Get mini-batches
-                        x = X[i*hp.batch_size: (i+1)*hp.batch_size]
-                        sources = Sources[i*hp.batch_size: (i+1)*hp.batch_size]
-                        targets = Targets[i*hp.batch_size: (i+1)*hp.batch_size]
-                        print('prepared input data')
+                ### Get mini-batches
+                x = X[i*hp.batch_size: (i+1)*hp.batch_size]
+                sources = Sources[i*hp.batch_size: (i+1)*hp.batch_size]
+                targets = Targets[i*hp.batch_size: (i+1)*hp.batch_size]
+                print('prepared input data')
+                
+                ### Autoregressive inference
+                preds = np.zeros((hp.batch_size, hp.summary_maxlen), np.int32)
+                for j in range(hp.summary_maxlen):
+                    _preds = sess.run(g.preds, {g.x: x, g.y: preds})
+                    preds[:, j] = _preds[:, j]
+            
+                for source, target, pred in zip(sources, targets, preds): # sentence-wise
+                    got = " ".join(idx2word[idx] for idx in pred).split("</S>")[0].strip()
+                    
+                    if write_file:
+                        sentence_to_write = "-source: {}\n-expected: {}\n-got: {}\n\n".format(source, target, got)
                         
-                        ### Autoregressive inference
-                        preds = np.zeros((hp.batch_size, hp.summary_maxlen), np.int32)
-                        for j in range(hp.summary_maxlen):
-                            if j == hp.summary_maxlen - 1:
-                                _batch_rouge, _acc, _preds = sess.run([g.batch_rouge, g.acc, g.preds], {g.x: x, g.y: preds})
-                            else:
-                                _preds = sess.run(g.preds, {g.x: x, g.y: preds})
-                                preds[:, j] = _preds[:, j]
-                        '''
-                        total_acc += _acc
-                        total_rouge += (float(_batch_rouge) / hp.batch_size)
-                        '''
-                        ### Write to file
-                        for source, target, pred in zip(sources, targets, preds): # sentence-wise
-                            got = " ".join(idx2word[idx] for idx in pred).split("</S>")[0].strip()
-                            sentence_to_write = "-source: {}\n-expected: {}\n-got: {}\n\n".format(source, target, got)
-                            
-                            print(sentence_to_write)
-                            fout.write(sentence_to_write)
-                            fout2.write(got.strip() + '\n')
-                            fout3.write(target.strip() + '\n')
+                        print(sentence_to_write)
+                        fout.write(sentence_to_write)
+                        fout2.write(got.strip() + '\n')
+                        fout3.write(target.strip() + '\n')
 
-                            fout.flush()
-                            fout2.flush()
-                            fout3.flush()
+                        fout.flush()
+                        fout2.flush()
+                        fout3.flush()
 
-                            # bleu score
-                            ref = target.split()
-                            hypothesis = got.split()
-                            if len(ref) > 3 and len(hypothesis) > 3:
-                                list_of_refs.append([ref])
-                                hypotheses.append(hypothesis)
-                                
-                    total_acc = float(total_acc) / num_batch
-                    total_rouge = float(total_rouge) / num_batch
-                    nsml.report(step=cur_step, test_accuracy=float(total_acc), test_rouge=float(total_rouge))
+                    # bleu score
+                    ref = target.split()
+                    hypothesis = got.split()
+                    if len(ref) > 3 and len(hypothesis) > 3:
+                        list_of_refs.append(ref)
+                        hypotheses.append(hypothesis)
+            
+            ## Calculate bleu score and rouge
+            rouge = rouge_l_sentence_level(hypotheses, list_of_refs)
+            # (eval_sentences, ref_sentences):
+            
+            rouge = np.mean(rouge)
+            nsml.report(step=cur_step, eval_rouge=float(rouge))
 
-                    ## Calculate bleu score
-                    score = corpus_bleu(list_of_refs, hypotheses)
-                    print("Bleu Score = " + str(100*score))
-                    fout.write("Bleu Score = " + str(100*score))
-    # return score
     return None
 
 if __name__ == '__main__':

@@ -44,50 +44,53 @@ def create_data(source_sents, target_sents):
     
     doc_sents = list(map(lambda line: line.split(), source_sents))
     sum_sents = list(map(lambda line: line.split(), target_sents))
-
-    # Index
+    
     X, Y, Sources, Targets = [], [], [], []
-
+    
     cur_ariticle_idx = 0
     for source_sent, target_sent in zip(doc_sents, sum_sents):
-        
         if cur_ariticle_idx % 1000000 == 0:
             print("\tPreparing {}-th article matrix".format(cur_ariticle_idx))
         
-        if cur_ariticle_idx == 1000:
-            break  # TEMP
-
+        # if cur_ariticle_idx == 400:
+        # break  # TEMP
+        
         # remove short sentences & chop long sentences
         if len(source_sent) < hp.article_minlen or len(target_sent) < hp.summary_minlen:
             continue
-        if len(source_sent) > hp.article_maxlen:
-            source_sent = source_sent[:hp.article_maxlen]
-        if len(target_sent) > hp.summary_maxlen:
-            target_sent = target_sent[:hp.summary_maxlen]
+        
+        if len(source_sent) >= hp.article_maxlen:
+            source_sent = source_sent[:(hp.article_maxlen-1)] # 1 for </S>
+        if len(target_sent) >= hp.summary_maxlen:
+            target_sent = target_sent[:(hp.summary_maxlen-1)]
 
-        x = [article2idx.get(word, 1) for word in (source_sent + [u"</S>"]) ]
+        x = [article2idx.get(word, 1) for word in (source_sent + [u"</S>"])]
         y = [sum2idx.get(word, 1) for word in (target_sent + [u"</S>"]) ]
         
-        if len(x) <= hp.article_maxlen and len(y) <= hp.summary_maxlen:
+        if len(x) < hp.article_maxlen:
             x = np.lib.pad(x, [0, hp.article_maxlen - len(x)], 'constant', constant_values=(0, 0))
+        if len(y) < hp.summary_maxlen:
             y = np.lib.pad(y, [0, hp.summary_maxlen - len(y)], 'constant', constant_values=(0, 0))
 
-            try:
-                assert len(x) == hp.article_maxlen
-                assert len(y) == hp.summary_maxlen
-            except AssertionError as error:
-                logging.info("current article length: ", len(x), "current article maxlen: ", hp.article_maxlen)
-                logging.info("current summary length: ", len(y), "current summary maxlen: ", hp.summary_maxlen)
+        try:
+            assert len(x) == hp.article_maxlen
+            assert len(y) == hp.summary_maxlen
+        except AssertionError as error:
+            print("current article length: ", len(x), "current article maxlen: ", hp.article_maxlen)
+            print("current summary length: ", len(y), "current summary maxlen: ", hp.summary_maxlen)
 
-            X.append(x)
-            Y.append(y)
-            Sources.append(" ".join(source_sent).strip())
-            Targets.append(" ".join(target_sent).strip())
+        # print("len of x: {}".format(len(x))) (400)
+        X.append(x)
+        Y.append(y)
+        Sources.append(" ".join(source_sent).strip())
+        Targets.append(" ".join(target_sent).strip())
+        
         cur_ariticle_idx += 1
-
+    
     # list of np.array -> 2d np.array
     X = np.array(X)
     Y = np.array(Y)
+    print("number of data: ", X.shape, Y.shape)
     return X, Y, Sources, Targets
 
 
@@ -105,8 +108,8 @@ def create_test_data(source_sents):
         if cur_ariticle_idx % 100000 == 0:
             print("\tPreparing {}-th article matrix".format(cur_ariticle_idx))
 
-        if cur_ariticle_idx == 200:
-            break  # TEMP
+        # if cur_ariticle_idx == 200:
+        #   break  # TEMP
 
         x = [article2idx.get(word, 1) for word in (source_sent + [u"</S>"]) ]
 
@@ -141,7 +144,7 @@ def load_data(type='train'):
     
     with open(doc_path, 'r', encoding="utf-8") as docfile:
         doc_sents = docfile.readlines()
-
+    
     if type != 'test':
         with open(sum_path, 'r', encoding="utf-8") as sumfile:
             sum_sents = sumfile.readlines()
@@ -149,12 +152,10 @@ def load_data(type='train'):
         if type == 'train':
             return X, Y
         elif type == 'eval':
-            print("doc_sents: {}; sum_sents: {}".format(len(doc_sents), len(sum_sents)))
             return X, Sources, Targets
 
         # tmp
         elif type == 'eval_tmp':
-            print("doc_sents: {}; sum_sents: {}".format(len(doc_sents), len(sum_sents)))
             return X, Sources, Targets
 
 
@@ -188,31 +189,6 @@ def get_batch_data():
 
     return x, y, num_batch # (N, T), (N, T), ()
 
-'''
-    def load_train_data():
-    print('Loading training data...')
-    
-    with open(hp.source_train, 'r', encoding="utf-8") as docfile:
-    doc_sents = docfile.readlines()
-    with open(hp.target_train, 'r', encoding="utf-8") as sumfile:
-    sum_sents = sumfile.readlines()
-    
-    X, Y, _, _ = create_data(doc_sents, sum_sents)  # return: X, Y, Sources, Targets
-    return X, Y
-    
-    
-    def load_test_data():
-    def _refine(line):
-    line = regex.sub("<[^>]+>", "", line)
-    line = regex.sub("[^\s\p{Latin}']", "", line)
-    return line.strip()
-    
-    with open(hp.source_test, 'r', encoding="utf-8") as docfile:
-    doc_sents = docfile.readlines()
-    
-    X, Sources = create_test_data(doc_sents)
-    return X, Sources # (1064, 150)
-    '''
 
 if __name__ == '__main__':
     X, Sources, Targets = load_data(type='eval')

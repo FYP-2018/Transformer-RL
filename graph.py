@@ -18,7 +18,7 @@ class Graph():
         with self.graph.as_default():
             if is_training:
                 print('Getting batch data...')
-                self.x, self.y, self.num_batch = get_batch_data()  # (N, T)
+                self.x, self.y, self.num_batch = get_batch_data()  # (N, T) # padding
             
             else:  # inference
                 self.x = tf.placeholder(tf.int32, shape=(None, hp.article_maxlen))
@@ -40,30 +40,35 @@ class Graph():
                 self.rl_loss = self._add_rl_loss()
                 # self.rl_loss = tf.Print(input_=self.rl_loss, data=[self.rl_loss, self.ml_loss, self.sl, self.reward_diff], message='LS / ML / self.sl / reward_diff')
                 
-                self.loss =  self.eta  * self.rl_loss + (1 - self.eta ) * self.ml_loss
+                self.loss =  self.eta  * self.rl_loss + (1 - self.eta) * self.ml_loss
 
                 # Training Scheme
                 self.global_step = tf.Variable(0, name='global_step', trainable=False)
                 self.optimizer = tf.train.AdamOptimizer(learning_rate=hp.lr, beta1=0.9, beta2=0.98, epsilon=1e-8)
                 
-                self.grads_and_vars_mix = self.optimizer.compute_gradients(loss=self.loss) # TODO: change mean_loss to mix_loss
-                self.train_op_mix = self.optimizer.apply_gradients(grads_and_vars=self.grads_and_vars_mix, global_step=self.global_step)
+                grads_and_vars_mix = self.optimizer.compute_gradients(loss=self.loss)
+                grads_and_vars_ml = self.optimizer.compute_gradients(loss=self.ml_loss)
                 
-                self.grads_and_vars_ml = self.optimizer.compute_gradients(loss=self.ml_loss) # TODO: change mean_loss to mix_loss
-                self.train_op_ml = self.optimizer.apply_gradients(grads_and_vars=self.grads_and_vars_ml, global_step=self.global_step)
-
-
-                # record gradient
+                grad_mix, vars_mix = zip(*grads_and_vars_mix) # parse grad and var
+                grad_ml, vars_ml = zip(*grads_and_vars_ml) # parse grad and var
+                
+                # add gradient clipping
+                clipped_grad_mix, globle_norm_mix = tf.clip_by_global_norm(grad_mix, hp.maxgradient)
+                clipped_grad_ml, globle_norm_ml = tf.clip_by_global_norm(grad_ml, hp.maxgradient)
+                self.globle_norm_ml = globle_norm_ml
+                self.train_op_mix = self.optimizer.apply_gradients(grads_and_vars=zip(clipped_grad_mix, vars_mix),
+                                                                   global_step=self.global_step)
+                self.train_op_ml  = self.optimizer.apply_gradients(grads_and_vars=zip(clipped_grad_ml, vars_ml),
+                                                                  global_step=self.global_step)
                 '''
-                for index, grad in enumerate(self.grads_and_vars):
-                    if index % 15 != 0:
-                        continue
-                    if isinstance(grad[0], tf.IndexedSlices):
-                        tf.summary.histogram(name="{}-grad".format(grad[1].name), values=grad[0].values)
-                    else:
-                        tf.summary.histogram(name="{}-grad".format(grad[1].name), values=grad[0])
+                self.train_op_mix = self.optimizer.apply_gradients(grads_and_vars=grads_and_vars_mix,
+                                                                   global_step=self.global_step)
+                self.train_op_ml  = self.optimizer.apply_gradients(grads_and_vars=grads_and_vars_ml,
+                                                                   global_step=self.global_step)
                 '''
+                
                 # Summary
+                tf.summary.scalar('globle_norm_ml', globle_norm_ml)
                 tf.summary.histogram(name="embedding", values=self.get_embedding_table())
                 tf.contrib.summary.scalar('rl_loss', self.rl_loss)
                 tf.contrib.summary.scalar('ml_loss', self.ml_loss)
@@ -119,7 +124,7 @@ class Graph():
                                                        is_training=is_training,
                                                        causality=False)
                         
-                        self.enc = feedforward(self.enc, num_units=[4 * hp.hidden_units, hp.hidden_units])
+                        self.enc = feedforward(self.enc, num_units=[hp.ffw_unit, hp.hidden_units])
                         ## ATTENTION: the hard-coded >> 4 * hp.hidden_units <<
                         tf.summary.histogram(name="ffw-output/{}".format(i), values=self.enc)
 
@@ -189,13 +194,11 @@ class Graph():
                                                        reuse=reuse)
 
                         self.dec = feedforward(self.dec,
-                                               num_units=[4 * hp.hidden_units, hp.hidden_units],
+                                               num_units=[hp.ffw_unit, hp.hidden_units],
                                                inside_loop=inside_loop,
                                                reuse=reuse)
-                        # tf.summary.histogram(name="ffw-output/{}".format(i), values=self.dec)
         
             # Final linear projection
-            # self.logits = tf.layers.dense(self.dec, len(en2idx), name='final_output_dense')
             self.logits = tf.layers.dense(self.dec, self.vocab_size, name='final_output_dense', reuse=reuse)
             return self.logits
     

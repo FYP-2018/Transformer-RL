@@ -241,16 +241,17 @@ def multihead_attention(queries,
         # Scale
         outputs = outputs / (K_.get_shape().as_list()[-1] ** 0.5)
         
-        # Key Masking
+        # Key Masking ###TODO: simply the mask (calculated before embedding -> pass)
         key_masks = tf.sign(tf.abs(tf.reduce_sum(keys, axis=-1))) # (N, T_k)
         key_masks = tf.tile(key_masks, [num_heads, 1]) # (h*N, T_k)
         key_masks = tf.tile(tf.expand_dims(key_masks, 1), [1, tf.shape(queries)[1], 1]) # (h*N, T_q, T_k)
         
-        paddings = tf.ones_like(outputs)*(-2**32+1)
+        paddings = tf.ones_like(outputs)*(-2**32+1)  ###TODO: -inf
         outputs = tf.where(tf.equal(key_masks, 0), paddings, outputs) # (h*N, T_q, T_k)
   
         # Causality = Future blinding
         if causality:
+            ### TODO: directly calculate batch mask
             diag_vals = tf.ones_like(outputs[0, :, :]) # (T_q, T_k)
             # tril = tf.contrib.linalg.LinearOperatorTriL(diag_vals).to_dense() # (T_q, T_k)
             tril = tf.linalg.LinearOperatorLowerTriangular(diag_vals).to_dense() # (T_q, T_k))
@@ -260,7 +261,7 @@ def multihead_attention(queries,
             outputs = tf.where(tf.equal(masks, 0), paddings, outputs) # (h*N, T_q, T_k)
   
         # Activation
-        outputs = tf.nn.softmax(outputs) # (h*N, T_q, T_k)
+        outputs = tf.nn.softmax(outputs, dim=-1) # (h*N, T_q, T_k) (default is also -1)
          
         # Query Masking
         query_masks = tf.sign(tf.abs(tf.reduce_sum(queries, axis=-1))) # (N, T_q)
@@ -274,7 +275,7 @@ def multihead_attention(queries,
         # Weighted sum
         outputs = tf.matmul(outputs, V_) # ( h*N, T_q, C/h)
         
-        # Restore shape
+        # Restore shape ### MAYBE RESHAPE
         outputs = tf.concat(tf.split(outputs, num_heads, axis=0), axis=2) # (N, T_q, C)
 
         # add a projection layer
