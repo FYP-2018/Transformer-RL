@@ -17,10 +17,10 @@ class Hyperparams: # for CNNDM data
     eval_record_threshold = 1000
     eval_record_steps = 200  # should be larger than checkpoint_steps? otherwise would duplicate
     train_record_steps = 50
-    eta_thredshold = 60
-    num_epochs = eta_thredshold
+    num_ml_epoch = 60
+    num_epochs = num_ml_epoch
 
-    batch_size = 32  # orig：32
+    batch_size = 6  # orig：32
     
     ## data source
     source_train = os.path.join(DATASET_PATH, 'train', 'train_content.txt')
@@ -40,7 +40,7 @@ class Hyperparams: # for CNNDM data
     article_minlen = 100
     article_maxlen = 400  # Maximum number of words in a sentence. alias = T.
     summary_minlen = 20
-    summary_maxlen = 100  # Maximum number of words in a sentence. alias = T.
+    summary_maxlen = 60  # Maximum number of words in a sentence. alias = T.
     
     ## training parameter
     sinusoid = False # If True, use sinusoid. If false, positional embedding.
@@ -52,6 +52,7 @@ class Hyperparams: # for CNNDM data
     
     lr = 0.0001
     dropout_rate = 0.1
+    eta_init = 0.0
     maxgradient = 1000
 
 

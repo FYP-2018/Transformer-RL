@@ -36,31 +36,43 @@ def load_sum_vocab():
     return word2idx, idx2word
 
 
-def create_data(source_sents, target_sents):
+def create_data(source_path, target_path):
     logging.info("Creating data...")
-    assert (len(source_sents) == len(target_sents)), "inconsistant sources len and targets len"
+    
     article2idx, idx2article = load_doc_vocab()
     sum2idx, idx2sum = load_sum_vocab()
     
-    doc_sents = list(map(lambda line: line.split(), source_sents))
-    sum_sents = list(map(lambda line: line.split(), target_sents))
-    
+    source_file = open(source_path, 'r', encoding='utf-8')
+    target_file = open(target_path, 'r', encoding='utf-8')
+
     X, Y, Sources, Targets = [], [], [], []
-    
     cur_ariticle_idx = 0
-    for source_sent, target_sent in zip(doc_sents, sum_sents):
+    
+    while True:
+        source_sent = source_file.readline()
+        target_sent = target_file.readline()
+
+        if not source_sent:
+            if target_sent:
+                raise ValueError("inconsistent number of articles in source and target file")
+            break
+
         if cur_ariticle_idx % 1000000 == 0:
             print("\tPreparing {}-th article matrix".format(cur_ariticle_idx))
         
         # if cur_ariticle_idx == 400:
-        # break  # TEMP
+        #     break  # TEMP
         
+        source_sent = source_sent.split()
+        target_sent = target_sent.split()
+
         # remove short sentences & chop long sentences
         if len(source_sent) < hp.article_minlen or len(target_sent) < hp.summary_minlen:
             continue
-        
+
         if len(source_sent) >= hp.article_maxlen:
             source_sent = source_sent[:(hp.article_maxlen-1)] # 1 for </S>
+
         if len(target_sent) >= hp.summary_maxlen:
             target_sent = target_sent[:(hp.summary_maxlen-1)]
 
@@ -79,7 +91,6 @@ def create_data(source_sents, target_sents):
             print("current article length: ", len(x), "current article maxlen: ", hp.article_maxlen)
             print("current summary length: ", len(y), "current summary maxlen: ", hp.summary_maxlen)
 
-        # print("len of x: {}".format(len(x))) (400)
         X.append(x)
         Y.append(y)
         Sources.append(" ".join(source_sent).strip())
@@ -87,7 +98,9 @@ def create_data(source_sents, target_sents):
         
         cur_ariticle_idx += 1
     
-    # list of np.array -> 2d np.array
+    source_file.close()
+    target_file.close()
+
     X = np.array(X)
     Y = np.array(Y)
     print("number of data: ", X.shape, Y.shape)
@@ -132,7 +145,6 @@ def load_data(type='train'):
     if type not in LEGAL_TYPE:
         raise TypeError('Invalid type: should be train/test/eval')
     
-    print('Loading {} data...'.format(type))
     if type == 'train' or type == 'eval_tmp':
         doc_path = hp.source_train
         sum_path = hp.target_train
@@ -142,44 +154,33 @@ def load_data(type='train'):
     elif type == 'test':
         doc_path = hp.source_test
     
-    with open(doc_path, 'r', encoding="utf-8") as docfile:
-        doc_sents = docfile.readlines()
     
-    if type != 'test':
-        with open(sum_path, 'r', encoding="utf-8") as sumfile:
-            sum_sents = sumfile.readlines()
-        X, Y, Sources, Targets = create_data(doc_sents, sum_sents)
+    if type == 'test':
+        with open(doc_path, 'r', encoding="utf-8") as docfile:
+            doc_sents = docfile.readlines()
+        X, Sources = create_test_data(doc_sents)
+        return X, Sources # (1064, 150)
+
+    else:
+        X, Y, Sources, Targets = create_data(doc_path, sum_path)
         if type == 'train':
             return X, Y
         elif type == 'eval':
             return X, Sources, Targets
-
-        # tmp
         elif type == 'eval_tmp':
             return X, Sources, Targets
 
 
-    else: # parallel to type != 'test'
-        X, Sources = create_test_data(doc_sents)
-        return X, Sources # (1064, 150)
-
-
 def get_batch_data():
-    print("getting batch_data")
-    # Load data
+    print("getting batch_data...")
     X, Y = load_data(type='train')
     
-    # calc total batch count
     num_batch = len(X) // hp.batch_size
     
-    # Convert to tensor - SAVE MEMORY! NICE
     X = tf.convert_to_tensor(X, tf.int32)
     Y = tf.convert_to_tensor(Y, tf.int32)
 
-    # Create Queues
     input_queues = tf.train.slice_input_producer([X, Y])    # Produces a slice of each `Tensor` in `tensor_list`
-
-    # create batch queues
     x, y = tf.train.shuffle_batch(input_queues,
                                 num_threads=8,
                                 batch_size=hp.batch_size, 
