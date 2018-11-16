@@ -186,13 +186,10 @@ def eval(type='eval', cur_step=0, write_file=True):
             num_batch = len(X) // hp.batch_size
             print("num batch: ", num_batch, "len(X): ", len(X) )
             for i in range(num_batch):
-                print('The {}-th batch'.format(i))
-
                 ### Get mini-batches
                 x = X[i*hp.batch_size: (i+1)*hp.batch_size]
                 sources = Sources[i*hp.batch_size: (i+1)*hp.batch_size]
                 targets = Targets[i*hp.batch_size: (i+1)*hp.batch_size]
-                print('prepared input data')
                 
                 ### Autoregressive inference
                 preds = np.zeros((hp.batch_size, hp.summary_maxlen), np.int32)
