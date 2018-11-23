@@ -49,6 +49,11 @@ def train():
             for epoch in range(1, hp.num_epochs+1):
                 print("Starting {}-th epoch".format(epoch))
                 
+                if epoch == 1:
+                    sess.run(train_g.eta.initializer) # explicitly init eta
+                    train_g.subset_saver.restore(sess, tf.train.latest_checkpoint(hp.pretrain_logdir))
+                    print("Restored previous training model!")
+
                 # not train the RL part in frist num_ml_epoch session for efficiency
                 if epoch <= hp.num_ml_epoch:
                     train_op = train_g.train_op_ml
@@ -56,10 +61,12 @@ def train():
                     train_op = train_g.train_op_mix
                     
                     cur_eta = sess.run(train_g.eta)
+                    '''
                     if cur_eta <= 0.9:
                         sess.run(train_g.update_eta)
                         print("increasing eta by 0.1, current eta = {} ".format(cur_eta + 0.1))
-                
+                    '''
+                    print("not increasing eta: current eta = {}".format(cur_eta))
                 if sv.should_stop():
                     break
             
@@ -67,15 +74,16 @@ def train():
                     true_step = step + (epoch - 1) * train_g.num_batch
                     
                     if true_step % hp.train_record_steps == 0:
-                        outp = [train_g.loss, train_g.acc, train_g.rouge, train_g.globle_norm_ml, train_op, train_g.merged]
-                        loss, acc, rouge, norm_ml, _, summary = sess.run(outp)
+                        outp = [train_g.loss, train_g.acc, train_g.rouge, train.reward_diff, train_g.globle_norm_ml, train_op, train_g.merged]
+                        loss, acc, rouge, reward_diff, norm_ml, _, summary = sess.run(outp)
                         
                         # visualize
                         nsml.report(step=true_step,
                                     train_loss=float(loss),
                                     train_accuracy=float(acc),
                                     rouge=float(rouge),
-                                    norm_ml=float(norm_ml))
+                                    norm_ml=float(norm_ml),
+                                    reward_diff=float(reward_diff))
                         train_g.filewriter.add_summary(summary, true_step)
                     
                     else:
@@ -90,8 +98,7 @@ def train():
                         
                     # iteration indent
                 # epoch indent
-                if epoch % 5 == 0: # record eval result every 5 epoch
-                    eval(cur_step=true_step, write_file=True)
+                eval(cur_step=true_step, write_file=True)
     print("Done")
 
 

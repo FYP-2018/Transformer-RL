@@ -215,6 +215,7 @@ def multihead_attention(queries,
     Returns
       A 3d tensor with shape of (N, T_q, C)  
     '''
+    
     with tf.variable_scope(scope, reuse=reuse):
         # Set the fall back option for num_units
         if num_units is None:
@@ -224,8 +225,7 @@ def multihead_attention(queries,
         # Q = tf.layers.dense(queries, num_units, activation=tf.nn.relu) # (N, T_q, C)
         # K = tf.layers.dense(keys, num_units, activation=tf.nn.relu) # (N, T_k, C)
         # V = tf.layers.dense(keys, num_units, activation=tf.nn.relu) # (N, T_k, C)
-
-        # TODO: reuse all the dense layer here
+        
         Q = tf.layers.dense(queries, num_units, use_bias=False, activation=None) # (N, T_q, C)
         K = tf.layers.dense(keys, num_units, use_bias=False, activation=None) # (N, T_k, C)
         V = tf.layers.dense(keys, num_units, use_bias=False, activation=None) # (N, T_k, C)        
@@ -234,7 +234,7 @@ def multihead_attention(queries,
         Q_ = tf.concat(tf.split(Q, num_heads, axis=2), axis=0) # (h*N, T_q, C/h) 
         K_ = tf.concat(tf.split(K, num_heads, axis=2), axis=0) # (h*N, T_k, C/h) 
         V_ = tf.concat(tf.split(V, num_heads, axis=2), axis=0) # (h*N, T_k, C/h) 
-
+        
         # Multiplication
         outputs = tf.matmul(Q_, tf.transpose(K_, [0, 2, 1])) # (h*N, T_q, T_k)
         
