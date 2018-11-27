@@ -151,7 +151,7 @@ class Hyperparams: # for LCSTS char data
     num_heads = 4
     
     
-    lr = 0.00003  # ml: 0.0001
+    lr = 0.000001  # ml: 0.0001
     dropout_rate = 0.1
     eta_init = 0.95
     maxgradient = 1000

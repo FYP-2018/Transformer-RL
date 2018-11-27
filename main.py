@@ -74,8 +74,8 @@ def train():
                     true_step = step + (epoch - 1) * train_g.num_batch
                     
                     if true_step % hp.train_record_steps == 0:
-                        outp = [train_g.loss, train_g.acc, train_g.rouge, train.reward_diff, train_g.globle_norm_ml, train_op, train_g.merged]
-                        loss, acc, rouge, reward_diff, norm_ml, _, summary = sess.run(outp)
+                        outp = [train_g.loss, train_g.acc, train_g.rouge, train_g.reward_diff, train_g.clipped_reward_diff, train_g.globle_norm_ml, train_op, train_g.merged]
+                        loss, acc, rouge, reward_diff, clipped_reward_diff, norm_ml, _, summary = sess.run(outp)
                         
                         # visualize
                         nsml.report(step=true_step,
@@ -83,7 +83,8 @@ def train():
                                     train_accuracy=float(acc),
                                     rouge=float(rouge),
                                     norm_ml=float(norm_ml),
-                                    reward_diff=float(reward_diff))
+                                    reward_diff=float(reward_diff),
+                                    clipped_reward_diff=float(clipped_reward_diff))
                         train_g.filewriter.add_summary(summary, true_step)
                     
                     else:

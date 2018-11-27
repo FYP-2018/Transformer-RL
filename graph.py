@@ -64,7 +64,8 @@ class Graph():
                 
                 # Summary
                 tf.summary.scalar('globle_norm_ml', globle_norm_ml)
-                tf.summary.histogram(name='reward_diff', values=self.reward_dif)
+                tf.summary.histogram(name='reward_diff', values=self.reward_diff)
+                tf.summary.histogram(name='clipped_reward_diff', values=self.clipped_reward_diff)
                 tf.summary.scalar('rl_loss', self.rl_loss)
                 tf.summary.scalar('ml_loss', self.ml_loss)
                 tf.summary.scalar('loss', self.loss)
@@ -318,9 +319,14 @@ class Graph():
             self.reward_diff += rouge_l_fscore([greedy_preds[sent_i]], [real_y]) - rouge_l_fscore([sample_preds[sent_i]], [real_y])
         
         self.reward_diff = tf.Print(input_=self.reward_diff, data=[self.reward_diff], message='reward_diff: ')
+        
+        self.clipped_reward_diff = tf.math.minimum(x=self.reward_diff,
+                                                   y=tf.ones(shape=()))
+        self.clipped_reward_diff = tf.math.maximum(x=self.clipped_reward_diff,
+                                                   y=-tf.ones(shape=()))
 
-        rl_loss = tf.reduce_sum(self.reward_diff * sample_logits) / (hp.batch_size * hp.summary_maxlen)
-
+        # rl_loss = tf.reduce_sum(self.reward_diff * sample_logits) / (hp.batch_size * hp.summary_maxlen)
+        rl_loss = tf.reduce_sum(self.clipped_reward_diff * sample_logits) / (hp.batch_size * hp.summary_maxlen)
         rl_loss = tf.Print(input_=rl_loss, data=[rl_loss], message='rl_loss: ')
         return rl_loss # masked
         
