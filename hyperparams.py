@@ -151,7 +151,8 @@ class Hyperparams: # for LCSTS char data
     num_heads = 4
     
     
-    lr = 0.000001  # ml: 0.0001
+    lr = 3e-6  # ml: 0.0001
+    max_reward_diff = 1.5  # upper & lower bound for reward difference (for rl)
     dropout_rate = 0.1
     eta_init = 0.95
     maxgradient = 1000

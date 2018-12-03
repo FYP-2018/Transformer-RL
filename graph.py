@@ -321,9 +321,9 @@ class Graph():
         self.reward_diff = tf.Print(input_=self.reward_diff, data=[self.reward_diff], message='reward_diff: ')
         
         self.clipped_reward_diff = tf.math.minimum(x=self.reward_diff,
-                                                   y=tf.ones(shape=()))
+                                                   y=tf.ones(shape=()) * hp.max_reward_diff)
         self.clipped_reward_diff = tf.math.maximum(x=self.clipped_reward_diff,
-                                                   y=-tf.ones(shape=()))
+                                                   y=-tf.ones(shape=()) * hp.max_reward_diff)
 
         # rl_loss = tf.reduce_sum(self.reward_diff * sample_logits) / (hp.batch_size * hp.summary_maxlen)
         rl_loss = tf.reduce_sum(self.clipped_reward_diff * sample_logits) / (hp.batch_size * hp.summary_maxlen)
