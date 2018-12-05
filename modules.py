@@ -197,7 +197,10 @@ def multihead_attention(queries,
                         causality=False,
                         scope="multihead_attention",
                         inside_loop=False,
-                        reuse=None):
+                        reuse=None,
+                        record_weight=False,
+                        type=None,
+                        atten_node=None):
     '''Applies multihead attention.
     
     Args:
@@ -215,6 +218,7 @@ def multihead_attention(queries,
     Returns
       A 3d tensor with shape of (N, T_q, C)  
     '''
+    
     with tf.variable_scope(scope, reuse=reuse):
         # Set the fall back option for num_units
         if num_units is None:
@@ -224,8 +228,7 @@ def multihead_attention(queries,
         # Q = tf.layers.dense(queries, num_units, activation=tf.nn.relu) # (N, T_q, C)
         # K = tf.layers.dense(keys, num_units, activation=tf.nn.relu) # (N, T_k, C)
         # V = tf.layers.dense(keys, num_units, activation=tf.nn.relu) # (N, T_k, C)
-
-        # TODO: reuse all the dense layer here
+        
         Q = tf.layers.dense(queries, num_units, use_bias=False, activation=None) # (N, T_q, C)
         K = tf.layers.dense(keys, num_units, use_bias=False, activation=None) # (N, T_k, C)
         V = tf.layers.dense(keys, num_units, use_bias=False, activation=None) # (N, T_k, C)        
@@ -234,7 +237,7 @@ def multihead_attention(queries,
         Q_ = tf.concat(tf.split(Q, num_heads, axis=2), axis=0) # (h*N, T_q, C/h) 
         K_ = tf.concat(tf.split(K, num_heads, axis=2), axis=0) # (h*N, T_k, C/h) 
         V_ = tf.concat(tf.split(V, num_heads, axis=2), axis=0) # (h*N, T_k, C/h) 
-
+        
         # Multiplication
         outputs = tf.matmul(Q_, tf.transpose(K_, [0, 2, 1])) # (h*N, T_q, T_k)
         
@@ -262,7 +265,15 @@ def multihead_attention(queries,
   
         # Activation
         outputs = tf.nn.softmax(outputs, dim=-1) # (h*N, T_q, T_k) (default is also -1)
-         
+        
+        if record_weight and type != None and atten_node != None:
+            if type == 'enc_selfatten':
+                atten_node.enc_selfatten = outputs
+            elif type == 'dec_selfatten':
+                atten_node.dec_selfatten = outputs
+            elif type == 'vanilla_atten':
+                atten_node.vanilla_atten = outputs
+                
         # Query Masking
         query_masks = tf.sign(tf.abs(tf.reduce_sum(queries, axis=-1))) # (N, T_q)
         query_masks = tf.tile(query_masks, [num_heads, 1]) # (h*N, T_q)

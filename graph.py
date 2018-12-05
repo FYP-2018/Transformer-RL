@@ -8,9 +8,18 @@ from modules import *
 
 io_pairs = namedtuple(typename='io_pairs', field_names='input output')
 
+class AttentionNode():
+    '''used only for refer to attention tensor'''
+    def __init__(self):
+        self.enc_selfatten = None
+        self.dec_selfatten = None
+        self.vanilla_atten = None
+
 class Graph():
     def __init__(self, is_training=True):
         self.graph = tf.Graph()
+        self.atten_node = AttentionNode()
+        
         # de2idx, idx2de = load_doc_vocab()
         # self.vocab_size = len(de2idx)
         self.vocab_size = len(load_doc_vocab()[0])
@@ -119,7 +128,10 @@ class Graph():
                                                        num_heads=hp.num_heads,
                                                        dropout_rate=hp.dropout_rate,
                                                        is_training=is_training,
-                                                       causality=False)
+                                                       causality=False,
+                                                       record_weight=True,
+                                                       type='enc_selfatten',
+                                                       atten_node=self.atten_node)
                         
                         self.enc = feedforward(self.enc, num_units=[hp.ffw_unit, hp.hidden_units])
                         ## ATTENTION: the hard-coded >> 4 * hp.hidden_units <<
@@ -176,7 +188,10 @@ class Graph():
                                                        causality=True,
                                                        scope="self_attention",
                                                        inside_loop=inside_loop,
-                                                       reuse=reuse)
+                                                       reuse=reuse,
+                                                       record_weight=True,
+                                                       type='dec_selfatten',
+                                                       atten_node=self.atten_node)
 
                         self.dec = multihead_attention(queries=self.dec,
                                                        keys=self.enc,
@@ -187,7 +202,10 @@ class Graph():
                                                        causality=False,
                                                        scope="vanilla_attention",
                                                        inside_loop=inside_loop,
-                                                       reuse=reuse)
+                                                       reuse=reuse,
+                                                       record_weight=True,
+                                                       type='vanilla_atten',
+                                                       atten_node=self.atten_node)
 
                         self.dec = feedforward(self.dec,
                                                num_units=[hp.ffw_unit, hp.hidden_units],
@@ -247,22 +265,26 @@ class Graph():
                 cur_logit = full_logits[:, cur_timestep, :] # shape: (N, W)
                 
                 # add mask on <PAD>
-                masks = tf.sign(cur_logit) # shape: (N, W)
+                
+                masks = tf.sign(cur_logit) # shape: (N, W); 0 for 0 entries, 1 or -1 for others
+                # 这里应该改成用pred作为mask的依据吧？？logit怎么都不会为0的。
+                # 而且应该是..不知道。又感觉不用mask。。先去掉好惹
                 paddings = tf.ones_like(cur_logit)*(-2**32+1) # -inf (to reduce its influence in softmax)
                 cur_logit = tf.where(tf.equal(masks, 0), paddings, cur_logit) # (N, W)
-                cur_logit = tf.nn.softmax(cur_logit, axis=-1)
+                
+                cur_logit = tf.nn.softmax(cur_logit, axis=-1) # shape: (N, M), each (, M) is softmaxed
                 
                 
                 # if greedy: apply greedy inference at each step,
                 # otherwise sample according to current word distribution
                 cur_preds = tf.cond(pred=greedy,
                                     true_fn=lambda: tf.argmax(cur_logit, axis=-1), # (N, )
-                                    false_fn=lambda: tf.multinomial(logits=tf.log(cur_logit), num_samples=1)) # (batch_size, 1)
+                                    false_fn=lambda: tf.multinomial(logits=tf.log(cur_logit), num_samples=1)) # (N, 1)
                 cur_preds = tf.to_int32(tf.reshape(cur_preds, shape=(hp.batch_size, )))  # (N, )
                 cur_idx = tf.stack([tf.range(start=0, limit=tf.shape(full_logits)[0]), cur_preds],
-                                   axis=-1) # (num_batch, 2)
+                                   axis=-1) # (N, 2)
                                    
-                cur_logit = tf.gather_nd(params=cur_logit, indices=cur_idx) # (N, ) # find logit of chosen idx
+                cur_logit = tf.gather_nd(params=cur_logit, indices=cur_idx) # (N, ) # the logit of cur_idx
                 
                 last_logits += tf.log(cur_logit) # shape: (N, ) sum up the log prob at each timestep
                 last_preds = tf.concat(values=[last_preds, tf.reshape(cur_preds, shape=(hp.batch_size, 1))],
@@ -304,13 +326,20 @@ class Graph():
         greedy_logits, greedy_preds = self._rl_autoinfer(greedy=tf.constant(value=True, dtype=tf.bool), name='greedy_loop')
         self.sl = sample_logits
         
+        sample_logits = tf.Print(input_=sample_logits, data=[sample_logits], message='sample_logits: ')
+        greedy_logits = tf.Print(input_=greedy_logits, data=[greedy_logits], message='greedy_logits: ')
+        
+        
         self.reward_diff = tf.zeros(shape=())
         for sent_i, ref in enumerate(tf.unstack(self.y)):
             real_y = ref[:tf.reduce_sum(tf.to_int32(tf.not_equal(self.y, 0)))] # remove the <PAD> in the end
             self.reward_diff += rouge_l_fscore([greedy_preds[sent_i]], [real_y]) - rouge_l_fscore([sample_preds[sent_i]], [real_y])
         
+        self.reward_diff = tf.Print(input_=self.reward_diff, data=[self.reward_diff], message='reward_diff: ')
+
         rl_loss = tf.reduce_sum(self.reward_diff * sample_logits) / (hp.batch_size * hp.summary_maxlen)
-        
+
+        rl_loss = tf.Print(input_=rl_loss, data=[rl_loss], message='rl_loss: ')
         return rl_loss # masked
         
     

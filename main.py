@@ -5,11 +5,13 @@
 from __future__ import print_function
 import os, codecs
 import logging
+import random
 from tqdm import tqdm
 
-import nsml
+#import nsml
 import numpy as np
 import tensorflow as tf
+import matplotlib.pyplot as plt
 from nltk.translate.bleu_score import corpus_bleu
 
 from modules import *
@@ -18,215 +20,178 @@ from hyperparams import Hyperparams as hp
 from data_load import load_doc_vocab, load_sum_vocab, load_data
 from rouge_tensor import rouge_l_sentence_level
 
-def train():
-    try:
-        if not os.path.exists(hp.logdir):
-            tf.logging.info('making logdir')
-            os.mkdir(hp.logdir)
-    except:
-        tf.logging.info('making logdir failed')
-        pass
-    
-    # Load vocabulary
-    de2idx, idx2de = load_doc_vocab()
-    en2idx, idx2en = load_sum_vocab()
-    
-    print("Constructing graph...")
-    train_g = Graph("train")
+def softmax(x):
+    """Compute softmax values for each sets of scores in x."""
+    return np.exp(x) / np.sum(np.exp(x), axis=0)
 
-    print("Start training...")
-    with train_g.graph.as_default():
-        sv = tf.train.Supervisor(logdir=hp.logdir)
-        config = tf.ConfigProto(allow_soft_placement=True,
-                                log_device_placement=False)
-        config.gpu_options.allow_growth = True
-        
-        with sv.managed_session(config=config) as sess:
-            coord = tf.train.Coordinator()
-            threads = tf.train.start_queue_runners(sess=sess, coord=coord)
-            
-            print("Start training: epoches={}, num batch={}".format(hp.num_epochs, train_g.num_batch))
-            for epoch in range(1, hp.num_epochs+1):
-                print("Starting {}-th epoch".format(epoch))
-                
-                # not train the RL part in frist num_ml_epoch session for efficiency
-                if epoch <= hp.num_ml_epoch:
-                    train_op = train_g.train_op_ml
-                else:
-                    train_op = train_g.train_op_mix
-                    
-                    cur_eta = sess.run(train_g.eta)
-                    if cur_eta <= 0.9:
-                        sess.run(train_g.update_eta)
-                        print("increasing eta by 0.1, current eta = {} ".format(cur_eta + 0.1))
-                
-                if sv.should_stop():
-                    break
-            
-                for step in range(train_g.num_batch):
-                    true_step = step + (epoch - 1) * train_g.num_batch
-                    
-                    if true_step % hp.train_record_steps == 0:
-                        outp = [train_g.loss, train_g.acc, train_g.rouge, train_g.globle_norm_ml, train_op, train_g.merged]
-                        loss, acc, rouge, norm_ml, _, summary = sess.run(outp)
-                        
-                        # visualize
-                        nsml.report(step=true_step,
-                                    train_loss=float(loss),
-                                    train_accuracy=float(acc),
-                                    rouge=float(rouge),
-                                    norm_ml=float(norm_ml))
-                        train_g.filewriter.add_summary(summary, true_step)
-                    
-                    else:
-                        sess.run(train_op)
-                    
-                    if true_step % hp.checkpoint_steps == 0:
-                        sv.saver.save(sess, hp.logdir + '/model_epoch_%02d_step_%d' % (epoch, true_step))
-                    
-                    if true_step > 0 and true_step % hp.eval_record_steps == 0:
-                        eval(cur_step=true_step, write_file=False)
-                        # nsml.report(step=true_step, blue_score=float(blue_score))
-                        
-                    # iteration indent
-                # epoch indent
-                if epoch % 5 == 0: # record eval result every 5 epoch
-                    eval(cur_step=true_step, write_file=True)
-    print("Done")
-
-
-def test(num_epoch=10):
-    # Load graph
+def visualize():
     g = Graph(is_training=False)
-    print("Test Graph loaded")
+    print("visualizes Graph loaded")
     
-    # Load data
-    X, Sources = load_data(type='test')
-    word2idx, idx2word = load_sum_vocab()
-    
-    # Start session
-    with g.graph.as_default():
-        sv = tf.train.Supervisor(logdir=hp.logdir)
-        # with sv.managed_session(config=tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)) as sess:
-        with sv.managed_session(
-            start_standard_services=False,
-            config=tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
-        ) as sess:
-            
-            ## Restore parameters
-            sv.saver.restore(sess, tf.train.latest_checkpoint(hp.logdir))
-            print("Restored!")
-            
-            ## Get model name
-            mname = open(hp.logdir + '/checkpoint', 'r').read().split('"')[1] # model name
-            
-            ## Inference
-            if not os.path.exists('results'): 
-                os.mkdir('results')
-            
-            with codecs.open("results/test-" + mname, "w", "utf-8") as fout:
-                list_of_refs, hypotheses = [], []
-                for i in range(len(X) // hp.batch_size):
-                    ### Get mini-batches
-                    x = X[i*hp.batch_size: (i+1)*hp.batch_size]
-                    sources = Sources[i*hp.batch_size: (i+1)*hp.batch_size]
-                    
-                    ### Autoregressive inference
-                    # preds = np.zeros((hp.batch_size, hp.summary_maxlen), np.int32)
-                    preds = np.zeros((x.shape[0], hp.summary_maxlen), np.int32)
-                    for j in range(hp.summary_maxlen):
-                        # _preds = sess.run(g.preds, {g.x: x, g.y: preds})
-                        _preds, _acc = sess.run([g.preds, g.acc], {g.x: x, g.y: preds})
-                        preds[:, j] = _preds[:, j]
-                    
-                    print("at step {}: rough-1 = {}".format(num_epoch, _acc))
-                    # nsml.report(step=num_epoch, rough1=float(_acc))
-                    
-                    for source, pred in zip(sources, preds): # sentence-wise
-                        got = " ".join(idx2word[idx] for idx in pred).split("</S>")[0].strip()
-                        sentence_to_write = "- source: " + source + "\n- got: " + got + "\n\n"
-                        
-                        print(sentence_to_write)
-                        fout.write(sentence_to_write)
-                        fout.flush()
 
-
-def eval(type='eval', cur_step=0, write_file=True):
-    # Load graph
-    g = Graph(is_training=False)
-    print("Eval Graph loaded")
-    
     # Load data
-    # X, Sources, Targets = load_data(type='eval')
-    X, Sources, Targets = load_data(type=type)
+    # X, Sources, Targets = load_data(type=type)
+    source = '本 文 总 结 了 十 个 可 穿 戴 产 品 的 设 计 原 则 ， 而 这 些 原 则 ， 同 样 也 是 笔 者 认 为 是 这 个 行 业 最 吸 引 人 的 地 方 ： 1 . 为 人 们 解 决 重 复 性 问 题 ； 2 . 从 人 开 始 ， 而 不 是 从 机 器 开 始 ； 3 . 要 引 起 注 意 ， 但 不 要 刻 意 ； 4 . 提 升 用 户 能 力 ， 而 不 是 取 代 人'.split(' ')
     
     de2idx, idx2de = load_doc_vocab()
-    word2idx, idx2word = load_sum_vocab()
     
-    
-    # Start session
+    source_idx = [de2idx.get(word, 1) for word in (source + [u"</S>"])]
+    if len(source_idx) < hp.article_maxlen:
+        source_idx = np.lib.pad(source_idx, [0, hp.article_maxlen - len(source_idx)], 'constant', constant_values=(0, 0))
+
     with g.graph.as_default():
         sv = tf.train.Supervisor()
         with sv.managed_session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
-            sv.saver.restore(sess, tf.train.latest_checkpoint(hp.logdir))
+            sv.saver.restore(sess, tf.train.latest_checkpoint(hp.pretrain_logdir))
             print("Restored!")
             
-            mname = open(hp.logdir + '/checkpoint', 'r').read().split('"')[1] # model name
+            x = [source_idx]
+            sources = [source]
             
-            ## Inference
-            if not os.path.exists('results'): os.mkdir('results')
+            ### Autoregressive inference
+            preds = np.zeros((1, hp.summary_maxlen), np.int32) # only one output is generated
+            # atten = sess.run(g.atten_node.enc_selfatten, {g.x: x, g.y: preds})
             
-            if write_file:
-                ### Write to file
-                fout2 = codecs.open("results/eval-pred", "w", "utf-8")
-                fout3 = codecs.open("results/eval-title", "w", "utf-8")
-                fout =  codecs.open("results/eval-" + type + "_" + mname, "w", "utf-8")
-            
-            list_of_refs, hypotheses = [], []
-            num_batch = len(X) // hp.batch_size
-            print("num batch: ", num_batch, "len(X): ", len(X) )
-            for i in range(num_batch):
-                ### Get mini-batches
-                x = X[i*hp.batch_size: (i+1)*hp.batch_size]
-                sources = Sources[i*hp.batch_size: (i+1)*hp.batch_size]
-                targets = Targets[i*hp.batch_size: (i+1)*hp.batch_size]
-                
-                ### Autoregressive inference
-                preds = np.zeros((hp.batch_size, hp.summary_maxlen), np.int32)
-                for j in range(hp.summary_maxlen):
+            for j in range(hp.summary_maxlen):
+                print("the {} step: ".format(j))
+                if j == hp.summary_maxlen - 1:
+                    outp_lists = [g.atten_node.enc_selfatten, g.atten_node.dec_selfatten,
+                                  g.atten_node.vanilla_atten, g.preds]
+                    enc_atten, dec_atten, vanilla_atten, _preds = sess.run(outp_lists,
+                                                                        {g.x: x, g.y: preds})
+                else:
                     _preds = sess.run(g.preds, {g.x: x, g.y: preds})
-                    preds[:, j] = _preds[:, j]
+                preds[:, j] = _preds[:, j]
             
-                for source, target, pred in zip(sources, targets, preds): # sentence-wise
-                    got = " ".join(idx2word[idx] for idx in pred).split("</S>")[0].strip()
-                    
-                    if write_file:
-                        sentence_to_write = "-source: {}\n-expected: {}\n-got: {}\n\n".format(source, target, got)
-                        
-                        print(sentence_to_write)
-                        fout.write(sentence_to_write)
-                        fout2.write(got.strip() + '\n')
-                        fout3.write(target.strip() + '\n')
+            got = " ".join(idx2de[idx] for idx in preds[0]).split("</S>")[0].strip()
+            got = got.split()
 
-                        fout.flush()
-                        fout2.flush()
-                        fout3.flush()
+        # self_atten_visualize(source, enc_atten, 'enc_atten')
+        self_atten_visualize(got, dec_atten, 'dec_atten')
+        # vanilla_atten_visualize(source, got, vanilla_atten)
+        print("vanilla_atten: ", vanilla_atten.shape)
 
-                    # bleu score
-                    ref = target.split()
-                    hypothesis = got.split()
-                    if len(ref) > 3 and len(hypothesis) > 3:
-                        list_of_refs.append(ref)
-                        hypotheses.append(hypothesis)
+        # rouge = rouge_l_sentence_level(hypotheses, list_of_refs)
+        # (eval_sentences, ref_sentences):
+
+
+def self_atten_visualize(source, atten, title):
+    print(atten.shape)
+    margin = 0.002
+
+    import matplotlib.font_manager as mfm
+    # font_path = '/Users/user/Downloads/cwtex-q-fonts-TTFs-0.4/ttf/cwTeXQFangsongZH-Medium.ttf'
+    font_path = '/Users/user/Library/Fonts/msyh.ttf'
+    prop = mfm.FontProperties(fname=font_path)
+
+    # cur_len = min(len(source), hp.article_maxlen)
+    if title == 'enc_atten':
+        cur_len = min(len(source), hp.article_maxlen)
+    elif title == 'dec_atten':
+        cur_len = min(len(source), hp.summary_maxlen)
+
+    
+    left_i = random.randint(0, cur_len-1) # randomly choose an word in input to visualize
+
+    plt.figure(figsize=(10, 5))
+
+    colors = ['r', 'g', 'b', 'k']
+    for i, c in enumerate(colors):
+        # word
+        x_s = margin
+        y_s = 1.0 - i * 0.23
+        step = (1.0 - margin * 2) / cur_len
+        left_word_coord = []
+        right_word_coord = []
+        
+        for word in source:
+            left_word_coord.append((x_s, y_s))
+            right_word_coord.append((x_s, y_s - 0.1))
             
-            ## Calculate bleu score and rouge
-            rouge = rouge_l_sentence_level(hypotheses, list_of_refs)
-            # (eval_sentences, ref_sentences):
-            
-            rouge = np.mean(rouge)
-            nsml.report(step=cur_step, eval_rouge=float(rouge))
+            plt.text(x_s, y_s, word, fontproperties=prop)
+            plt.text(x_s, y_s - 0.1, word, fontproperties=prop)
+            x_s += step
 
-    return None
+        
+        weights = atten[i, left_i, :cur_len]
+        left_coord = left_word_coord[left_i]
+
+        for right_i in range(cur_len):
+            right_coord = right_word_coord[right_i]
+            plt.plot((left_coord[0] + 0.005, right_coord[0] + 0.005),
+                     (left_coord[1], right_coord[1] + 0.03),
+                     c, alpha=weights[right_i])
+    
+    plt.xlim(0, 1)
+    plt.ylim(0, 1)
+    plt.axis('off')
+    plt.suptitle(title)
+    plt.tight_layout(rect=[0.01, 0.01, 0.99, 0.8])
+
+    plt.savefig(title + '.png')
+    print("finished", title)
+
+
+
+def vanilla_atten_visualize(source, pred, atten):
+    print(atten.shape)
+    margin = 0.002
+    
+    import matplotlib.font_manager as mfm
+    # font_path = '/Users/user/Downloads/cwtex-q-fonts-TTFs-0.4/ttf/cwTeXQFangsongZH-Medium.ttf'
+    font_path = '/Users/user/Library/Fonts/msyh.ttf'
+    prop = mfm.FontProperties(fname=font_path)
+    
+    src_cur_len = min(len(source), hp.article_maxlen)
+    prd_cur_len = min(len(pred), hp.summary_maxlen)
+
+    left_i = random.randint(0, prd_cur_len-1) # randomly choose an word in input to visualize
+    
+    plt.figure(figsize=(20, 5))
+
+    colors = ['r', 'g', 'b', 'k']
+    for i, c in enumerate(colors):
+
+        x_s = margin
+        y_s = 1.0 - i * 0.23
+        
+        x_l = x_s
+        x_r = x_s
+        
+        src_step = (1.0 - margin * 2) / src_cur_len
+        prd_step = (1.0 - margin * 2) / prd_cur_len
+        
+        left_word_coord = []
+        right_word_coord = []
+        
+        for word_i in range(src_cur_len):
+            left_word_coord.append((x_l, y_s))
+            right_word_coord.append((x_r, y_s - 0.1))
+            
+            if word_i < prd_cur_len:
+                plt.text(x_l, y_s, pred[word_i], fontproperties=prop)
+            plt.text(x_r, y_s - 0.1, source[word_i], fontproperties=prop)
+            
+            x_l += prd_step # left: query (which is the decoder input)
+            x_r += src_step # right: key (which is the encoder input)
+        
+        weights = atten[i, left_i, :src_cur_len]
+        left_coord = left_word_coord[left_i]
+        
+        for right_i in range(src_cur_len):
+            right_coord = right_word_coord[right_i]
+            plt.plot((left_coord[0] + 0.005, right_coord[0] + 0.005),
+                     (left_coord[1], right_coord[1] + 0.03),
+                     c, alpha=weights[right_i])
+
+    plt.xlim(0, 1)
+    plt.ylim(0, 1)
+    plt.axis('off')
+    plt.suptitle('vanilla_atten')
+    plt.tight_layout(rect=[0.01, 0.01, 0.99, 0.8])
+
+    plt.savefig('vanilla_atten.png')
+    print("finished vanila attention")
 
 if __name__ == '__main__':
     logging.info("START")
@@ -234,7 +199,22 @@ if __name__ == '__main__':
     
     from tensorflow.python.client import device_lib as dl
     logging.info("local device: ", dl.list_local_devices())
-    
-    train()
-    # eval()
 
+    visualize()
+    # train()
+    # eval()
+    
+    '''
+    import matplotlib.font_manager as mfm
+    # font_path = '/Users/user/Downloads/cwtex-q-fonts-TTFs-0.4/ttf/cwTeXQFangsongZH-Medium.ttf'
+    font_path = '/Users/user/Library/Fonts/msyh.ttf'
+    prop = mfm.FontProperties(fname=font_path)
+
+    plt.text(0.3, 0.3, "这里", fontproperties=prop)
+    plt.plot((0.3, 0.3), (0.5, 0.3))
+    plt.plot((0.3 + 0.015, 0.5), (0.3 + 0.015, 0.3))
+
+    plt.xlim(0, 1)
+    plt.ylim(0, 1)
+    plt.show()
+    '''
