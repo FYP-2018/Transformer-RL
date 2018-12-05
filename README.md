@@ -40,3 +40,6 @@ that the previous version have some bugs inside)
 2. investigate the Encoder-only version of transformer, 
 3. after step 2: replace the multi-head/original attention into Conv Attention (as suggested in paper _Generating 
 Wikipedia by Summarizing Long Sequences _), see if the results can be improved
+
+### P.S, for the atten_vis branch
+The code under that branch is for generating simple attention visualization (generate png file with matplotlib). Since the code is totally not cleaned and not updated with the code in /master branch, just leave it there for future reference
